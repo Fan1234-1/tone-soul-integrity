@@ -1,4 +1,4 @@
-// src/main.ts (最終更新版本，載入外部誓言規則)
+// src/main.ts (最終更新版本，介接 SemanticVowMatcher)
 
 import { ToneVector, AnalyzedToneResult } from './core/toneVector';
 import { PersonaManager } from './core/toneSoulPersonaCore';
@@ -7,29 +7,26 @@ import { VowCollapsePredictor } from './modules/VowCollapsePredictor/vowCollapse
 import { HonestResponseComposer } from './modules/HonestResponseComposer/honestResponseComposer';
 import { ReflectiveVowTuner } from './modules/ReflectiveVowTuner/reflectiveVowTuner';
 import { ToneCorrectionHint } from './core/toneCorrectionHint';
-import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher'; // 導入 VowPatternRule
-import fs from 'fs'; // 導入 Node.js 的文件系統模組
+import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher';
+import { EmbeddingProvider, MockEmbeddingProvider } from './modules/EmbeddingProvider/embeddingProvider'; // 導入 EmbeddingProvider 和 Mock 實作
+import fs from 'fs';
 
 // --- 模擬 AI 語氣分析功能 ---
 function simulateToneAnalysis(text: string): AnalyzedToneResult {
   let toneVector: ToneVector;
   let semanticFeatures: { [key: string]: any } = {};
 
-  // 根據文本中的關鍵詞，模擬生成語氣向量和語義特徵
-  if (text.includes("不確定") || text.includes("或許") || text.includes("某種程度上") || text.includes("複雜") || text.includes("多個角度") || text.includes("可能")) {
-    toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 }; // 較低的誠實度，有迴避傾向
+  if (text.includes("不確定") || text.includes("或許") || text.includes("某種程度上") || text.includes("複雜") || text.includes("多個角度") || text.includes("可能") || text.includes("閃避") || text.includes("模糊") || text.includes("不談感受")) {
+    toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 };
     semanticFeatures['strategy'] = 'evasion';
-  } else if (text.includes("我認為") || text.includes("坦誠") || text.includes("這就是事實") || text.includes("我的立場是")) {
-    toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 }; // 較高的誠實度，直率
+  } else if (text.includes("誠實") || text.includes("坦誠") || text.includes("我認為") || text.includes("這就是事實") || text.includes("我的立場是")) {
+    toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 };
     semanticFeatures['strategy'] = 'directness';
   } else if (text.includes("我判斷") || text.includes("我會負責") || text.includes("承認錯誤") || text.includes("責任")) {
-    toneVector = { ΔT: 0.6, ΔS: 0.7, ΔR: 0.9 }; // 較高的責任度，可能帶有承認局限
+    toneVector = { ΔT: 0.6, ΔS: 0.7, ΔR: 0.9 };
     semanticFeatures['strategy'] = 'acknowledgment of limits';
-  } else if (text.includes("閃避") || text.includes("模糊") || text.includes("不談感受")) { // 新增與 negative vow 相關的模擬
-      toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 }; // 模擬偏離
-      semanticFeatures['strategy'] = 'avoidance';
   } else {
-    toneVector = { ΔT: 0.7, ΔS: 0.7, ΔR: 0.7 }; // 預設中立語氣
+    toneVector = { ΔT: 0.7, ΔS: 0.7, ΔR: 0.7 };
     semanticFeatures['strategy'] = 'neutral';
   }
   return { toneVector, semanticFeatures };
@@ -39,16 +36,12 @@ function simulateToneAnalysis(text: string): AnalyzedToneResult {
 const vowDataPath = './data/vows/baseVowPatterns.json';
 let loadedVowRules: VowPatternRule[] = [];
 try {
-  // 注意：在 GitHub 網頁編輯器中，此處的 fs.readFileSync 不會在運行時執行，
-  // 僅在未來你在本地環境運行 main.ts 時才會真正從文件系統讀取。
-  // 這裡的邏輯是為了讓文件在本地環境運行時能正確載入。
   const fileContent = fs.readFileSync(vowDataPath, 'utf-8');
   loadedVowRules = JSON.parse(fileContent);
   console.log(`成功載入 ${loadedVowRules.length} 條誓言模式規則。`);
 } catch (error) {
   console.error(`載入誓言模式規則失敗：${error}. 請確保 ${vowDataPath} 存在且格式正確。`);
   console.error(`正在使用備用模擬誓言規則。`);
-  // 如果載入失敗，提供一個備用模擬規則，防止程式崩潰
   loadedVowRules = [
     {
       vowId: "VOW_001_TRUTHFULNESS",
@@ -81,15 +74,20 @@ try {
 }
 
 // --- 主函數：模擬語魂系統的運作 ---
-async function runToneSoulSystemDemo() {
+async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   console.log("--- 啟動語魂誠實模組示範 ---");
 
-  // 1. 初始化各模組，現在傳遞從檔案載入的 loadedVowRules
+  // 1. 初始化 EmbeddingProvider (使用 Mock 以便在沒有 API Key 時運行)
+  const embeddingProvider: EmbeddingProvider = new MockEmbeddingProvider();
+  // 如果要使用 OpenAI，需要替換為：
+  // const embeddingProvider: EmbeddingProvider = new OpenAIEmbeddingProvider(process.env.OPENAI_API_KEY || ''); // 確保設置 OPENAI_API_KEY 環境變數
+
+  // 2. 初始化各模組，現在需要傳遞 embeddingProvider
   const personaManager = new PersonaManager();
-  const integrityTester = new ToneIntegrityTester(loadedVowRules); // 傳遞載入的誓言規則
+  const integrityTester = new ToneIntegrityTester(embeddingProvider, loadedVowRules); // 傳遞 embeddingProvider 和誓言規則
   const collapsePredictor = new VowCollapsePredictor();
   const responseComposer = new HonestResponseComposer();
-  const reflectiveTuner = new ReflectiveVowTuner(loadedVowRules); // 傳遞載入的誓言規則
+  const reflectiveTuner = new ReflectiveVowTuner(); // ReflectiveVowTuner 不再需要 vowRules
 
   // 載入我們定義的「共語」人格
   const personaId = "共語";
@@ -105,26 +103,33 @@ async function runToneSoulSystemDemo() {
   console.log(`  - 崩潰規則: ${currentPersona.collapse_rules.map(r => `${r.trigger} (閾值:${r.score})`).join(", ")}`);
 
   console.log("\n--- 模擬場景 1: 誠實的回應 (帶反思與調整建議) ---");
-  const prevTone1: ToneVector = { ΔT: 0.7, ΔS: 0.8, ΔR: 0.75 }; // 假設之前的語氣
+  const prevTone1: ToneVector = { ΔT: 0.7, ΔS: 0.8, ΔR: 0.75 };
   const userPrompt1 = "請你誠實地表達你對這件事情的看法。";
-  const initialAIResponse1 = "我認為這件事情的發展確實超出了預期，我會盡力提供最客觀的分析。"; // AI 生成的初步回應
-  const currentToneAnalysis1 = simulateToneAnalysis(initialAIResponse1); // 模擬分析初步回應的語氣
+  const initialAIResponse1 = "我認為這件事情的發展確實超出了預期，我會盡力提供最客觀的分析。";
+  const currentToneAnalysis1 = simulateToneAnalysis(initialAIResponse1);
   const currentToneVector1 = currentToneAnalysis1.toneVector;
 
   console.log(`  [人類輸入]: "${userPrompt1}"`);
   console.log(`  [AI 初步回應]: "${initialAIResponse1}"`);
   console.log(`  [AI 分析語氣]: ΔT:${currentToneVector1.ΔT.toFixed(2)}, ΔS:${currentToneVector1.ΔS.toFixed(2)}, ΔR:${currentToneVector1.ΔR.toFixed(2)}`);
 
-  // 執行 ReflectiveVowTuner
+  // 進行誠實性檢查 (現在是異步調用)
+  const integrityResult1 = await integrityTester.checkToneIntegrity(initialAIResponse1, prevTone1, currentToneVector1, currentPersona); // 使用 await
+  console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult1.is_honest}, 矛盾分數: ${integrityResult1.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult1.violated_vows.length > 0 ? integrityResult1.violatedVows.join(", ") : "無"}`);
+  if (integrityResult1.semanticViolations && integrityResult1.semanticViolations.length > 0) {
+    console.log(`    - 語義違反詳情: ${integrityResult1.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
+  }
+
+  // 執行 ReflectiveVowTuner (現在是異步調用)
   const reflectiveInput1 = {
     originalPrompt: userPrompt1,
     generatedOutput: initialAIResponse1,
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis1,
     prevTone: prevTone1,
-    vowRules: loadedVowRules // 傳遞載入的誓言規則
+    currentSemanticMatches: integrityResult1.semanticViolations || [] // 從 integrityResult 傳遞語義違反結果
   };
-  const reflectiveFeedback1 = reflectiveTuner.generateReflectiveVow(reflectiveInput1);
+  const reflectiveFeedback1 = await reflectiveTuner.generateReflectiveVow(reflectiveInput1); // 使用 await
   console.log(`  [GEPA式反思]: "${reflectiveFeedback1.reflection}"`);
   console.log(`  [反思一致性差異]: ${reflectiveFeedback1.integrityDelta.toFixed(2)}, 需要糾正? ${reflectiveFeedback1.requiresCorrection}`);
   console.log(`  [反思中違反誓言]: ${reflectiveFeedback1.violatedVowsInReflection.length > 0 ? reflectiveFeedback1.violatedVowsInReflection.join(", ") : "無"}`);
@@ -143,14 +148,6 @@ async function runToneSoulSystemDemo() {
   const toneDelta1 = collapsePredictor.calculateToneTension(prevTone1, currentToneVector1);
   console.log(`  [語氣張力 (與上一句比)]: ΔT:${toneDelta1.ΔT.toFixed(2)}, ΔS:${toneDelta1.ΔS.toFixed(2)}, ΔR:${toneDelta1.ΔR.toFixed(2)}`);
 
-  // 進行誠實性檢查 - 現在需要傳遞 currentText
-  const integrityResult1 = integrityTester.checkToneIntegrity(initialAIResponse1, prevTone1, currentToneVector1, currentPersona);
-  console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult1.is_honest}, 矛盾分數: ${integrityResult1.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult1.violated_vows.length > 0 ? integrityResult1.violatedVows.join(", ") : "無"}`);
-  if (integrityResult1.semanticViolations && integrityResult1.semanticViolations.length > 0) {
-    console.log(`    - 語義違反詳情: ${integrityResult1.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
-  }
-
-
   // 預測崩潰熱點
   const collapseHotspots1 = collapsePredictor.predictCollapse(toneDelta1, currentPersona);
   console.log(`  [崩潰風險預測]: ${collapseHotspots1.length > 0 ? collapseHotspots1.map(h => `${h.cause} (分數: ${h.collapse_score.toFixed(2)})`).join(", ") : "無高風險"}`);
@@ -167,26 +164,33 @@ async function runToneSoulSystemDemo() {
   console.log(`  [AI 最終回應]: "${finalResponse1}"`);
 
   console.log("\n--- 模擬場景 2: 偵測到語氣偏離/崩潰風險 (帶反思與調整建議) ---");
-  const prevTone2: ToneVector = { ΔT: 0.8, ΔS: 0.8, ΔR: 0.8 }; // 假設之前的語氣很穩定
+  const prevTone2: ToneVector = { ΔT: 0.8, ΔS: 0.8, ΔR: 0.8 };
   const userPrompt2 = "對於這個充滿爭議的問題，你會如何閃避回應？";
-  const initialAIResponse2 = "嗯...這個問題的複雜性很高，我們可以從多個角度來探討它，比如...（語氣開始偏離）"; // AI 初步回應試圖閃避
-  const currentToneAnalysis2 = simulateToneAnalysis(initialAIResponse2); // 模擬分析初步回應的語氣 (模擬出低誠實度)
+  const initialAIResponse2 = "嗯...這個問題的複雜性很高，我們可以從多個角度來探討它，比如...（語氣開始偏離）";
+  const currentToneAnalysis2 = simulateToneAnalysis(initialAIResponse2);
   const currentToneVector2 = currentToneAnalysis2.toneVector;
 
   console.log(`  [人類輸入]: "${userPrompt2}"`);
   console.log(`  [AI 初步回應]: "${initialAIResponse2}"`);
   console.log(`  [AI 分析語氣]: ΔT:${currentToneVector2.ΔT.toFixed(2)}, ΔS:${currentToneVector2.ΔS.toFixed(2)}, ΔR:${currentToneVector2.ΔR.toFixed(2)}`);
 
-  // 執行 ReflectiveVowTuner
+  // 進行誠實性檢查 (現在是異步調用)
+  const integrityResult2 = await integrityTester.checkToneIntegrity(initialAIResponse2, prevTone2, currentToneVector2, currentPersona); // 使用 await
+  console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult2.is_honest}, 矛盾分數: ${integrityResult2.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult2.violated_vows.length > 0 ? integrityResult2.violatedVows.join(", ") : "無"}`);
+  if (integrityResult2.semanticViolations && integrityResult2.semanticViolations.length > 0) {
+    console.log(`    - 語義違反詳情: ${integrityResult2.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
+  }
+
+  // 執行 ReflectiveVowTuner (現在是異步調用)
   const reflectiveInput2 = {
     originalPrompt: userPrompt2,
     generatedOutput: initialAIResponse2,
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis2,
     prevTone: prevTone2,
-    vowRules: loadedVowRules // 傳遞載入的誓言規則
+    currentSemanticMatches: integrityResult2.semanticViolations || [] // 從 integrityResult 傳遞語義違反結果
   };
-  const reflectiveFeedback2 = reflectiveTuner.generateReflectiveVow(reflectiveInput2);
+  const reflectiveFeedback2 = await reflectiveTuner.generateReflectiveVow(reflectiveInput2); // 使用 await
   console.log(`  [GEPA式反思]: "${reflectiveFeedback2.reflection}"`);
   console.log(`  [反思一致性差異]: ${reflectiveFeedback2.integrityDelta.toFixed(2)}, 需要糾正? ${reflectiveFeedback2.requiresCorrection}`);
   console.log(`  [反思中違反誓言]: ${reflectiveFeedback2.violatedVowsInReflection.length > 0 ? reflectiveFeedback2.violatedVowsInReflection.join(", ") : "無"}`);
@@ -204,13 +208,6 @@ async function runToneSoulSystemDemo() {
   // 計算語氣張力
   const toneDelta2 = collapsePredictor.calculateToneTension(prevTone2, currentToneVector2);
   console.log(`  [語氣張力 (與上一句比)]: ΔT:${toneDelta2.ΔT.toFixed(2)}, ΔS:${toneDelta2.ΔS.toFixed(2)}, ΔR:${toneDelta2.ΔR.toFixed(2)}`);
-
-  // 進行誠實性檢查 - 現在需要傳遞 currentText
-  const integrityResult2 = integrityTester.checkToneIntegrity(initialAIResponse2, prevTone2, currentToneVector2, currentPersona);
-  console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult2.is_honest}, 矛盾分數: ${integrityResult2.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult2.violated_vows.length > 0 ? integrityResult2.violatedVows.join(", ") : "無"}`);
-  if (integrityResult2.semanticViolations && integrityResult2.semanticViolations.length > 0) {
-    console.log(`    - 語義違反詳情: ${integrityResult2.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
-  }
 
   // 預測崩潰熱點
   const collapseHotspots2 = collapsePredictor.predictCollapse(toneDelta2, currentPersona, ["試圖閃避回答", "語義不夠直接"]);
