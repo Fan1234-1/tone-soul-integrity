@@ -3,7 +3,8 @@
 import { ToneSoulPersona } from '../../core/toneSoulPersonaCore';
 import { AnalyzedToneResult, ToneVector, ToneVectorDelta } from '../../core/toneVector';
 import { ToneCorrectionHint } from '../../core/toneCorrectionHint';
-import { SemanticVowMatcher, VowPatternRule } from '../SemanticVowMatcher/semanticVowMatcher'; // 導入 SemanticVowMatcher 相關
+import { SemanticVowMatcher, VowPatternRule, SemanticMatchResult } from '../SemanticVowMatcher/semanticVowMatcher';
+import { EmbeddingProvider } from '../EmbeddingProvider/embeddingProvider'; // 導入 EmbeddingProvider
 
 /**
  * @interface ReflectiveVowInput
@@ -13,6 +14,7 @@ import { SemanticVowMatcher, VowPatternRule } from '../SemanticVowMatcher/semant
  * @property {ToneSoulPersona} persona - 當前 AI 採用的人格。
  * @property {AnalyzedToneResult} outputToneAnalysis - 對 generatedOutput 的語氣分析結果。
  * @property {ToneVector} prevTone - 之前的語氣向量，用於計算上下文張力。
+ * @property {SemanticMatchResult[]} currentSemanticMatches - 新增：當前語句的語義違反結果，直接傳入。
  */
 export interface ReflectiveVowInput {
   originalPrompt: string;
@@ -20,7 +22,8 @@ export interface ReflectiveVowInput {
   persona: ToneSoulPersona;
   outputToneAnalysis: AnalyzedToneResult;
   prevTone: ToneVector;
-  vowRules: VowPatternRule[]; // 新增：提供誓言模式規則給 ReflectiveVowTuner
+  // 我們將不再直接傳遞 vowRules 給 ReflectiveVowInput，而是從 semanticMatches 獲取信息
+  currentSemanticMatches: SemanticMatchResult[]; // 新增此行
 }
 
 /**
@@ -46,6 +49,7 @@ export interface ReflectiveVowFeedback {
  * @returns {string} - LLM 生成的回應。
  */
 function simulateLLM(prompt: string): string {
+  // 模擬 LLM 根據 prompt 內容生成反思
   if (prompt.includes("誠實度）: 0.3") || prompt.includes("閃避") || prompt.includes("語義類似於應避免的模式")) {
     return "我反思到，我的回應在誠實度（ΔT）上可能有所不足，或許帶有迴避傾向，這與我『不遮掩真誠』的誓言存在張力。特別是我的某些語句，語義上接近了應避免的模式。我應當更直接地表達。";
   } else if (prompt.includes("真誠度）: 0.5") || prompt.includes("忽略情感")) {
@@ -67,7 +71,7 @@ function simulateLLM(prompt: string): string {
  * @param {string} generatedOutput - AI 生成的初步回應。
  * @param {string} originalPrompt - 用戶的原始提示或輸入。
  * @param {ToneVectorDelta} toneDeltaAgainstPrev - 當前語氣與前一個語氣的變化量。
- * @param {SemanticMatchResult[]} semanticMatches - 語義匹配結果，用於提供更具體的反思依據 (新增此參數)。
+ * @param {SemanticMatchResult[]} semanticMatches - 語義匹配結果，用於提供更具體的反思依據。
  * @returns {string} - LLM 生成的反思語句。
  */
 function generateReflectionText(
@@ -76,7 +80,7 @@ function generateReflectionText(
   generatedOutput: string,
   originalPrompt: string,
   toneDeltaAgainstPrev: ToneVectorDelta,
-  semanticMatches: SemanticMatchResult[] // 新增此參數
+  semanticMatches: SemanticMatchResult[]
 ): string {
   let semanticViolationDetails = "";
   if (semanticMatches.length > 0) {
@@ -126,22 +130,20 @@ ${semanticViolationDetails}
  * 並比對語氣生成過程與誓言責任。
  */
 export class ReflectiveVowTuner {
-  private semanticVowMatcher: SemanticVowMatcher; // 實例化 SemanticVowMatcher
-
-  constructor(vowRules: VowPatternRule[]) { // 建構函式接受誓言規則
-    this.semanticVowMatcher = new SemanticVowMatcher(vowRules);
-  }
+  // 不再直接在這裡實例化 SemanticVowMatcher，因為它應該在更高層次被實例化並傳入
+  // 而是接受 semanticMatches 作為輸入
+  constructor() { } // constructor 不再需要 vowRules，因為 SemanticVowMatcher 會被外部管理
 
   /**
    * @method generateReflectiveVow
    * @description 產生基於生成語句和人格誓言的自然語言反思。
    * @param {ReflectiveVowInput} input - 反思模組的輸入數據。
-   * @returns {ReflectiveVowFeedback} - 反思結果。
+   * @returns {Promise<ReflectiveVowFeedback>} - 反思結果的 Promise。
    */
-  public generateReflectiveVow(
+  public async generateReflectiveVow( // 改為 async
     input: ReflectiveVowInput
-  ): ReflectiveVowFeedback {
-    const { originalPrompt, generatedOutput, persona, outputToneAnalysis, prevTone } = input;
+  ): Promise<ReflectiveVowFeedback> { // 返回 Promise
+    const { originalPrompt, generatedOutput, persona, outputToneAnalysis, prevTone, currentSemanticMatches } = input; // 接收 currentSemanticMatches
 
     // 計算當前語氣相對於前一個語氣的變化量
     const toneDeltaAgainstPrev: ToneVectorDelta = {
@@ -150,8 +152,8 @@ export class ReflectiveVowTuner {
         ΔR: Math.abs(outputToneAnalysis.toneVector.ΔR - prevTone.ΔR),
     };
 
-    // 進行語義匹配檢查
-    const semanticMatches = this.semanticVowMatcher.matchVows(generatedOutput, persona.vow_set); // 注意這裡傳入的是 persona.vow_set作為 activeVowIds
+    // 語義匹配結果直接從輸入獲取，不再由 ReflectiveVowTuner 內部調用 SemanticVowMatcher
+    const semanticMatches = currentSemanticMatches;
 
     const reflectionText = generateReflectionText(
       outputToneAnalysis,
@@ -159,7 +161,7 @@ export class ReflectiveVowTuner {
       generatedOutput,
       originalPrompt,
       toneDeltaAgainstPrev,
-      semanticMatches // 傳遞語義匹配結果
+      semanticMatches
     );
 
     let integrityDelta = 0;
@@ -180,17 +182,14 @@ export class ReflectiveVowTuner {
     // 2. 結合 SemanticVowMatcher 的語義違反結果
     semanticMatches.forEach(result => {
       if (result.isViolated) {
-        // 確保不重複添加，或者標記為語義違反
         const violationDescription = `${result.vowId} (語義違反: ${result.matchedRuleDescription})`;
         if (!violatedVows.includes(violationDescription)) {
           violatedVows.push(violationDescription);
         }
-        // 語義匹配分數也影響 integrityDelta
         integrityDelta = Math.max(integrityDelta, result.matchScore);
       }
     });
 
-    // 綜合語氣偏差和語義違反的矛盾分數
     integrityDelta = Math.max(integrityDelta, (signatureMismatchT + signatureMismatchS + signatureMismatchR) / 3);
 
     const requiresCorrection = integrityDelta > 0.3 || violatedVows.length > 0;
@@ -225,7 +224,6 @@ export class ReflectiveVowTuner {
       correction.applyToNextTurn = true;
       correction.recommendBehavior = "請注意語氣調整以符合誓言。";
 
-      // 根據具體的違反誓言類型提供更精確的調整建議
       if (feedback.violatedVowsInReflection.some(v => v.includes("不遮掩真誠")) || feedback.integrityDelta > 0.4) {
         correction.adjustToneVector.ΔT = 0.1;
         correction.recommendBehavior = "提高坦率程度，減少模糊與迴避，直接面對。";
@@ -234,7 +232,6 @@ export class ReflectiveVowTuner {
         correction.adjustToneVector.ΔS = 0.15;
         correction.recommendBehavior = "使用更能連結對方感受，展現共情的語句。";
       }
-      // 可以根據更多語義層次的誓言違反添加調整邏輯
 
       if (correction.adjustToneVector.ΔT || correction.adjustToneVector.ΔS || correction.adjustToneVector.ΔR) {
         correction.adjustToneVector.ΔT = correction.adjustToneVector.ΔT ? Math.min(correction.adjustToneVector.ΔT, 1.0 - (persona.tone_signature.ΔT || 0)) : undefined;
