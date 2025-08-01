@@ -8,7 +8,8 @@
 
 **- 這個圖展示了語魂系統中主要功能模組的層次與依賴關係。**
 
-```mermaid
+```
+mermaid
 graph TD
  A[ToneVector Analyzer] --> B[ToneIntegrityTester]
  B --> C[PersonaSelector (EchoRouter)]
