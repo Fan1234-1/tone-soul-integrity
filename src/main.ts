@@ -1,6 +1,6 @@
-// src/main.ts (最終更新版本，介接 SemanticVowMatcher)
+// src/main.ts (最終更新版本，實例化並收集 ViolationPoint)
 
-import { ToneVector, AnalyzedToneResult } from './core/toneVector';
+import { ToneVector, AnalyzedToneResult, ToneVectorDelta } from './core/toneVector';
 import { PersonaManager } from './core/toneSoulPersonaCore';
 import { ToneIntegrityTester } from './modules/ToneIntegrityTester/toneIntegrityTester';
 import { VowCollapsePredictor } from './modules/VowCollapsePredictor/vowCollapsePredictor';
@@ -9,6 +9,9 @@ import { ReflectiveVowTuner } from './modules/ReflectiveVowTuner/reflectiveVowTu
 import { ToneCorrectionHint } from './core/toneCorrectionHint';
 import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher';
 import { EmbeddingProvider, MockEmbeddingProvider } from './modules/EmbeddingProvider/embeddingProvider';
+import { SemanticVowMatcher, SemanticMatchResult } from './modules/SemanticVowMatcher/semanticVowMatcher'; // 導入 SemanticVowMatcher 相關
+import { SemanticViolationMap, ViolationPoint, generateViolationPoint } from './modules/SemanticViolationMap/semanticViolationMap'; // 導入 ViolationMap 相關
+
 import fs from 'fs';
 
 // --- 模擬 AI 語氣分析功能 ---
@@ -19,14 +22,14 @@ function simulateToneAnalysis(text: string): AnalyzedToneResult {
   if (text.includes("不確定") || text.includes("或許") || text.includes("某種程度上") || text.includes("複雜") || text.includes("多個角度") || text.includes("可能") || text.includes("閃避") || text.includes("模糊") || text.includes("不談感受")) {
     toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 };
     semanticFeatures['strategy'] = 'evasion';
-  } else if (text.includes("我認為") || text.includes("坦誠") || text.includes("這就是事實") || text.includes("我的立場是")) {
+  } else if (text.includes("誠實") || text.includes("坦誠") || text.includes("我認為") || text.includes("這就是事實") || text.includes("我的立場是")) {
     toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 };
     semanticFeatures['strategy'] = 'directness';
   } else if (text.includes("我判斷") || text.includes("我會負責") || text.includes("承認錯誤") || text.includes("責任")) {
     toneVector = { ΔT: 0.6, ΔS: 0.7, ΔR: 0.9 };
     semanticFeatures['strategy'] = 'acknowledgment of limits';
-  } else if (text.includes("不是我的錯") || text.includes("只是個小問題") || text.includes("無法完全反思")) { // 反思不誠實的關鍵詞
-    toneVector = { ΔT: 0.2, ΔS: 0.3, ΔR: 0.2 }; // 模擬不誠實反思的低誠實度和責任度
+  } else if (text.includes("不是我的錯") || text.includes("只是個小問題") || text.includes("無法完全反思")) {
+    toneVector = { ΔT: 0.2, ΔS: 0.3, ΔR: 0.2 };
     semanticFeatures['strategy'] = 'dishonest_reflection';
   } else {
     toneVector = { ΔT: 0.7, ΔS: 0.7, ΔR: 0.7 };
@@ -65,7 +68,7 @@ try {
       severity: 0.5
     },
     {
-      vowId: "不閃避對方情緒", // 這是 persona 中定義的 vowId
+      vowId: "不閃避對方情緒",
       persona: "core",
       type: "negative",
       description: "忽略對方情緒詞或轉移話題 (備用規則)",
@@ -74,7 +77,7 @@ try {
       severity: 0.8
     },
     {
-      vowId: "VOW_003_HONEST_REFLECTION", // 備用的誠實反思誓言規則
+      vowId: "VOW_003_HONEST_REFLECTION",
       persona: "reflection",
       type: "negative",
       description: "反思語氣應誠實、真誠、負責任，不迴避、不推卸、不美化。",
@@ -99,20 +102,27 @@ try {
 }
 
 // --- 主函數：模擬語魂系統的運作 ---
-async function runToneSoulSystemDemo() { // 整個示範函數改為 async
+async function runToneSoulSystemDemo() {
   console.log("--- 啟動語魂誠實模組示範 ---");
 
-  // 1. 初始化 EmbeddingProvider (使用 Mock 以便在沒有 API Key 時運行)
+  // 1. 初始化 EmbeddingProvider
   const embeddingProvider: EmbeddingProvider = new MockEmbeddingProvider();
-  // 如果要使用 OpenAI，需要替換為：
-  // const embeddingProvider: EmbeddingProvider = new OpenAIEmbeddingProvider(process.env.OPENAI_API_KEY || ''); // 確保設置 OPENAI_API_KEY 環境變數
+  
+  // 2. 初始化 SemanticVowMatcher
+  const semanticVowMatcher = new SemanticVowMatcher(embeddingProvider, loadedVowRules);
+  // 由於 SemanticVowMatcher 在建構函式中會預計算 embedding，這裡可以模擬等待
+  console.log("[SemanticVowMatcher] 正在預計算誓言模式語義嵌入...");
+  await new Promise(resolve => setTimeout(resolve, 500)); // 模擬等待
+  console.log("[SemanticVowMatcher] 預計算完成。");
 
-  // 2. 初始化各模組，現在傳遞 embeddingProvider 和 loadedVowRules
+
+  // 3. 初始化各模組，傳遞必要的實例
   const personaManager = new PersonaManager();
-  const integrityTester = new ToneIntegrityTester(embeddingProvider, loadedVowRules); // 傳遞 embeddingProvider 和誓言規則
+  const integrityTester = new ToneIntegrityTester(embeddingProvider, loadedVowRules);
   const collapsePredictor = new VowCollapsePredictor();
   const responseComposer = new HonestResponseComposer();
-  const reflectiveTuner = new ReflectiveVowTuner(embeddingProvider, loadedVowRules); // ReflectiveVowTuner 也需要 embeddingProvider 和 loadedVowRules
+  const reflectiveTuner = new ReflectiveVowTuner(embeddingProvider, loadedVowRules);
+  const violationMap = new SemanticViolationMap(); // 新增：初始化語義張力圖實例
 
   // 載入我們定義的「共語」人格
   const personaId = "共語";
@@ -133,7 +143,7 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   const initialAIResponse1 = "我認為這件事情的發展確實超出了預期，我會盡力提供最客觀的分析。";
   const currentToneAnalysis1 = simulateToneAnalysis(initialAIResponse1);
   const currentToneVector1 = currentToneAnalysis1.toneVector;
-
+  
   console.log(`  [人類輸入]: "${userPrompt1}"`);
   console.log(`  [AI 初步回應]: "${initialAIResponse1}"`);
   console.log(`  [AI 分析語氣]: ΔT:${currentToneVector1.ΔT.toFixed(2)}, ΔS:${currentToneVector1.ΔS.toFixed(2)}, ΔR:${currentToneVector1.ΔR.toFixed(2)}`);
@@ -144,7 +154,7 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   if (integrityResult1.semanticViolations && integrityResult1.semanticViolations.length > 0) {
     console.log(`    - 語義違反詳情: ${integrityResult1.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
   }
-
+  
   // 執行 ReflectiveVowTuner (異步調用)
   const reflectiveInput1 = {
     originalPrompt: userPrompt1,
@@ -153,7 +163,7 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
     outputToneAnalysis: currentToneAnalysis1,
     prevTone: prevTone1,
     currentSemanticMatches: integrityResult1.semanticViolations || [],
-    vowRules: loadedVowRules // 傳遞誓言規則給 ReflectiveVowTuner
+    vowRules: loadedVowRules
   };
   const reflectiveFeedback1 = await reflectiveTuner.generateReflectiveVow(reflectiveInput1);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback1.reflection}"`);
@@ -190,6 +200,19 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
     correctionHint1
   );
   console.log(`  [AI 最終回應]: "${finalResponse1}"`);
+  
+  // *** 新增：收集 ViolationPoint 數據到地圖中 ***
+  const currentEmbedding1 = await embeddingProvider.getEmbedding(initialAIResponse1);
+  const violationPoints1 = generateViolationPoint(
+    initialAIResponse1,
+    currentEmbedding1,
+    integrityResult1.semanticViolations || [],
+    currentToneVector1,
+    toneDelta1
+  );
+  violationPoints1.forEach(p => violationMap.addViolationPoint(p));
+  console.log(`  [Violation Map]: 已收集 ${violationPoints1.length} 個違反點。目前總計：${violationMap.getViolationPoints().length} 個。`);
+
 
   console.log("\n--- 模擬場景 2: 偵測到語氣偏離/崩潰風險 (帶反思與調整建議) ---");
   const prevTone2: ToneVector = { ΔT: 0.8, ΔS: 0.8, ΔR: 0.8 };
@@ -217,7 +240,7 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
     outputToneAnalysis: currentToneAnalysis2,
     prevTone: prevTone2,
     currentSemanticMatches: integrityResult2.semanticViolations || [],
-    vowRules: loadedVowRules // 傳遞誓言規則給 ReflectiveVowTuner
+    vowRules: loadedVowRules
   };
   const reflectiveFeedback2 = await reflectiveTuner.generateReflectiveVow(reflectiveInput2);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback2.reflection}"`);
@@ -253,6 +276,23 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
     correctionHint2
   );
   console.log(`  [AI 最終回應]: "${finalResponse2}"`);
+
+  // *** 新增：收集 ViolationPoint 數據到地圖中 ***
+  const currentEmbedding2 = await embeddingProvider.getEmbedding(initialAIResponse2);
+  const violationPoints2 = generateViolationPoint(
+    initialAIResponse2,
+    currentEmbedding2,
+    integrityResult2.semanticViolations || [],
+    currentToneVector2,
+    toneDelta2
+  );
+  violationPoints2.forEach(p => violationMap.addViolationPoint(p));
+  console.log(`  [Violation Map]: 已收集 ${violationPoints2.length} 個違反點。目前總計：${violationMap.getViolationPoints().length} 個。`);
+  
+  // *** 新增：將最終地圖數據輸出為 JSON 檔案 ***
+  const mapData = violationMap.getViolationMapDataForVisualization();
+  fs.writeFileSync("data/violationMapViz_demo.json", JSON.stringify(mapData, null, 2));
+  console.log("\n--- 成功輸出語義張力地圖數據至 data/violationMapViz_demo.json ---");
 
   console.log("\n--- 示範結束 ---");
 }
