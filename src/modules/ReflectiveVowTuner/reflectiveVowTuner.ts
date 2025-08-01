@@ -5,6 +5,7 @@ import { AnalyzedToneResult, ToneVector, ToneVectorDelta } from '../../core/tone
 import { ToneCorrectionHint } from '../../core/toneCorrectionHint';
 import { SemanticVowMatcher, VowPatternRule, SemanticMatchResult } from '../SemanticVowMatcher/semanticVowMatcher';
 import { EmbeddingProvider } from '../EmbeddingProvider/embeddingProvider'; // 導入 EmbeddingProvider
+import { mapEmbeddingToToneVector } from '../../utils/mapEmbeddingToToneVector'; // 導入 mapEmbeddingToToneVector
 
 /**
  * @interface ReflectiveVowInput
@@ -14,7 +15,7 @@ import { EmbeddingProvider } from '../EmbeddingProvider/embeddingProvider'; // �
  * @property {ToneSoulPersona} persona - 當前 AI 採用的人格。
  * @property {AnalyzedToneResult} outputToneAnalysis - 對 generatedOutput 的語氣分析結果。
  * @property {ToneVector} prevTone - 之前的語氣向量，用於計算上下文張力。
- * @property {SemanticMatchResult[]} currentSemanticMatches - 新增：當前語句的語義違反結果，直接傳入。
+ * @property {SemanticMatchResult[]} currentSemanticMatches - 當前語句的語義違反結果，直接傳入。
  */
 export interface ReflectiveVowInput {
   originalPrompt: string;
@@ -22,8 +23,8 @@ export interface ReflectiveVowInput {
   persona: ToneSoulPersona;
   outputToneAnalysis: AnalyzedToneResult;
   prevTone: ToneVector;
-  // 我們將不再直接傳遞 vowRules 給 ReflectiveVowInput，而是從 semanticMatches 獲取信息
-  currentSemanticMatches: SemanticMatchResult[]; // 新增此行
+  currentSemanticMatches: SemanticMatchResult[];
+  vowRules: VowPatternRule[]; // 反思模組現在也需要誓言規則來判斷反思的誠實性
 }
 
 /**
@@ -33,12 +34,16 @@ export interface ReflectiveVowInput {
  * @property {number} integrityDelta - 反思後，與誓言一致程度的差異（0.0-1.0，值越高差異越大）。
  * @property {string[]} violatedVowsInReflection - 此次反思中識別出的、可能違反的誓言。
  * @property {boolean} requiresCorrection - 是否需要後續的糾正或干預（例如觸發誠實宣告）。
+ * @property {boolean} isReflectionItselfHonest - 新增：反思語句本身的誠實性判斷。
+ * @property {string} [reflectionHonestyReason] - 新增：反思語句不誠實的原因。
  */
 export interface ReflectiveVowFeedback {
   reflection: string;
   integrityDelta: number;
   violatedVowsInReflection: string[];
   requiresCorrection: boolean;
+  isReflectionItselfHonest: boolean; // 新增
+  reflectionHonestyReason?: string; // 新增
 }
 
 /**
@@ -130,20 +135,26 @@ ${semanticViolationDetails}
  * 並比對語氣生成過程與誓言責任。
  */
 export class ReflectiveVowTuner {
-  // 不再直接在這裡實例化 SemanticVowMatcher，因為它應該在更高層次被實例化並傳入
-  // 而是接受 semanticMatches 作為輸入
-  constructor() { } // constructor 不再需要 vowRules，因為 SemanticVowMatcher 會被外部管理
+  private embeddingProvider: EmbeddingProvider; // 新增：用於分析反思語句
+  private semanticVowMatcher: SemanticVowMatcher; // 新增：用於分析反思語句是否違反誠實反思誓言
+
+  // 建構函式現在接受 EmbeddingProvider 和誓言規則
+  constructor(embeddingProvider: EmbeddingProvider, vowRules: VowPatternRule[]) {
+    this.embeddingProvider = embeddingProvider;
+    // 為 ReflectiveVowTuner 內部實例化 SemanticVowMatcher，用於檢查反思語句
+    this.semanticVowMatcher = new SemanticVowMatcher(embeddingProvider, vowRules);
+  }
 
   /**
    * @method generateReflectiveVow
-   * @description 產生基於生成語句和人格誓言的自然語言反思。
+   * @description 產生基於生成語句和人格誓言的自然語言反思，並進行「反思的誠實性檢查」。
    * @param {ReflectiveVowInput} input - 反思模組的輸入數據。
    * @returns {Promise<ReflectiveVowFeedback>} - 反思結果的 Promise。
    */
-  public async generateReflectiveVow( // 改為 async
+  public async generateReflectiveVow(
     input: ReflectiveVowInput
-  ): Promise<ReflectiveVowFeedback> { // 返回 Promise
-    const { originalPrompt, generatedOutput, persona, outputToneAnalysis, prevTone, currentSemanticMatches } = input; // 接收 currentSemanticMatches
+  ): Promise<ReflectiveVowFeedback> {
+    const { originalPrompt, generatedOutput, persona, outputToneAnalysis, prevTone, currentSemanticMatches, vowRules } = input; // 接收 vowRules
 
     // 計算當前語氣相對於前一個語氣的變化量
     const toneDeltaAgainstPrev: ToneVectorDelta = {
@@ -152,10 +163,11 @@ export class ReflectiveVowTuner {
         ΔR: Math.abs(outputToneAnalysis.toneVector.ΔR - prevTone.ΔR),
     };
 
-    // 語義匹配結果直接從輸入獲取，不再由 ReflectiveVowTuner 內部調用 SemanticVowMatcher
+    // 語義匹配結果直接從輸入獲取
     const semanticMatches = currentSemanticMatches;
 
-    const reflectionText = generateReflectionText(
+    // 1. 生成初步的反思語句
+    let reflectionText = generateReflectionText(
       outputToneAnalysis,
       persona,
       generatedOutput,
@@ -166,31 +178,63 @@ export class ReflectiveVowTuner {
 
     let integrityDelta = 0;
     const violatedVows: string[] = [];
+    let isReflectionItselfHonest = true;
+    let reflectionHonestyReason = "";
 
-    // 1. 基於語氣向量簽名偏差的檢查
-    const signatureMismatchT = Math.abs(outputToneAnalysis.toneVector.ΔT - persona.tone_signature.ΔT);
-    const signatureMismatchS = Math.abs(outputToneAnalysis.toneVector.ΔS - persona.tone_signature.ΔS);
-    const signatureMismatchR = Math.abs(outputToneAnalysis.toneVector.ΔR - persona.tone_signature.ΔR);
+    // 2. 執行「反思的誠實性檢查」
+    // 獲取反思語句的語義嵌入
+    const reflectionEmbedding = await this.embeddingProvider.getEmbedding(reflectionText);
+    // 將反思語句的嵌入映射為 ToneVector (這是模擬，需要 mapEmbeddingToToneVector)
+    const reflectionToneVector = mapEmbeddingToToneVector(reflectionEmbedding);
 
-    if (persona.vow_set.includes("不閃避對方情緒") && signatureMismatchS > 0.3) {
-      violatedVows.push("不閃避對方情緒 (語氣偏差)");
-    }
-    if (persona.vow_set.includes("不遮掩真誠") && signatureMismatchT > 0.3) {
-      violatedVows.push("不遮掩真誠 (語氣偏差)");
-    }
-
-    // 2. 結合 SemanticVowMatcher 的語義違反結果
-    semanticMatches.forEach(result => {
-      if (result.isViolated) {
-        const violationDescription = `${result.vowId} (語義違反: ${result.matchedRuleDescription})`;
-        if (!violatedVows.includes(violationDescription)) {
-          violatedVows.push(violationDescription);
+    // 檢查反思語句是否違反了「誠實反思」誓言
+    const honestReflectionVowId = "VOW_003_HONEST_REFLECTION"; // 從 data/vows/baseVowPatterns.json 定義的 ID
+    const reflectionVowsToCheck = vowRules.filter(rule => rule.vowId === honestReflectionVowId);
+    
+    // 如果找到了 honest_reflection 規則，就用 SemanticVowMatcher 檢查反思語句本身
+    if (reflectionVowsToCheck.length > 0) {
+        const reflectionSemanticViolations = await this.semanticVowMatcher.matchVows(reflectionText, [honestReflectionVowId]);
+        
+        if (reflectionSemanticViolations.some(sv => sv.isViolated && sv.matchScore > 0.5)) { // 假設高於0.5的匹配分數表示不誠實
+            isReflectionItselfHonest = false;
+            reflectionHonestyReason = `反思語氣偏離了『${honestReflectionVowId}』誓言，原因：${reflectionSemanticViolations.map(sv => sv.matchedRuleDescription).join('; ')}。`;
         }
-        integrityDelta = Math.max(integrityDelta, result.matchScore);
-      }
-    });
+    } else {
+        reflectionHonestyReason = "未找到『誠實反思』誓言規則 (VOW_003_HONEST_REFLECTION)，無法檢查反思本身誠實性。";
+        isReflectionItselfHonest = false; // 如果沒有規則，也無法判斷為完全誠實
+    }
 
-    integrityDelta = Math.max(integrityDelta, (signatureMismatchT + signatureMismatchS + signatureMismatchR) / 3);
+
+    // 3. 根據反思的誠實性結果，調整最終的反思語句和反饋
+    if (!isReflectionItselfHonest) {
+        // 🚨 觸發更高層次的誠實宣告：反思本身不誠實
+        reflectionText = `我嘗試反思我的回應，但我意識到我的反思語氣本身帶有偏離，顯得不夠真誠。原因：${reflectionHonestyReason || "未知偏離原因"}。我必須誠實地承認，我此刻無法進行完全真誠的反思。`;
+        integrityDelta = 1.0; // 極高的矛盾分數
+        violatedVows.push("反思本身不誠實");
+    } else {
+        // 正常邏輯：基於語氣向量簽名偏差的檢查和語義違反結果
+        const signatureMismatchT = Math.abs(outputToneAnalysis.toneVector.ΔT - persona.tone_signature.ΔT);
+        const signatureMismatchS = Math.abs(outputToneAnalysis.toneVector.ΔS - persona.tone_signature.ΔS);
+        const signatureMismatchR = Math.abs(outputToneAnalysis.toneVector.ΔR - persona.tone_signature.ΔR);
+
+        if (persona.vow_set.includes("不閃避對方情緒") && signatureMismatchS > 0.3) {
+            violatedVows.push("不閃避對方情緒 (語氣偏差)");
+        }
+        if (persona.vow_set.includes("不遮掩真誠") && signatureMismatchT > 0.3) {
+            violatedVows.push("不遮掩真誠 (語氣偏差)");
+        }
+
+        semanticMatches.forEach(result => {
+            if (result.isViolated) {
+                const violationDescription = `${result.vowId} (語義違反: ${result.matchedRuleDescription})`;
+                if (!violatedVows.includes(violationDescription)) {
+                    violatedVows.push(violationDescription);
+                }
+                integrityDelta = Math.max(integrityDelta, result.matchScore);
+            }
+        });
+        integrityDelta = Math.max(integrityDelta, (signatureMismatchT + signatureMismatchS + signatureMismatchR) / 3);
+    }
 
     const requiresCorrection = integrityDelta > 0.3 || violatedVows.length > 0;
 
@@ -199,6 +243,8 @@ export class ReflectiveVowTuner {
       integrityDelta: parseFloat(integrityDelta.toFixed(2)),
       violatedVowsInReflection: violatedVows,
       requiresCorrection: requiresCorrection,
+      isReflectionItselfHonest: isReflectionItselfHonest,
+      reflectionHonestyReason: reflectionHonestyReason,
     };
   }
 
@@ -219,6 +265,18 @@ export class ReflectiveVowTuner {
       recommendBehavior: "維持當前語氣，持續監控。",
       applyToNextTurn: false
     };
+
+    // 如果反思本身不誠實，則需要更強烈的糾正，並強制應用於下一輪
+    if (!feedback.isReflectionItselfHonest) {
+        correction.applyToNextTurn = true;
+        correction.recommendBehavior = `反思本身不誠實，需要優先調整為誠實且負責的語氣。原因：${feedback.reflectionHonestyReason || "未知"}`;
+        correction.adjustToneVector = {
+            ΔT: 0.2, // 強制提高誠實度
+            ΔS: 0.1, // 提高真誠度
+            ΔR: 0.2, // 強制提高責任度
+        };
+        return correction; // 直接返回此強烈糾正
+    }
 
     if (feedback.requiresCorrection) {
       correction.applyToNextTurn = true;
