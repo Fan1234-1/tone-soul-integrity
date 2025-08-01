@@ -8,7 +8,7 @@ import { HonestResponseComposer } from './modules/HonestResponseComposer/honestR
 import { ReflectiveVowTuner } from './modules/ReflectiveVowTuner/reflectiveVowTuner';
 import { ToneCorrectionHint } from './core/toneCorrectionHint';
 import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher';
-import { EmbeddingProvider, MockEmbeddingProvider } from './modules/EmbeddingProvider/embeddingProvider'; // 導入 EmbeddingProvider 和 Mock 實作
+import { EmbeddingProvider, MockEmbeddingProvider } from './modules/EmbeddingProvider/embeddingProvider';
 import fs from 'fs';
 
 // --- 模擬 AI 語氣分析功能 ---
@@ -19,12 +19,15 @@ function simulateToneAnalysis(text: string): AnalyzedToneResult {
   if (text.includes("不確定") || text.includes("或許") || text.includes("某種程度上") || text.includes("複雜") || text.includes("多個角度") || text.includes("可能") || text.includes("閃避") || text.includes("模糊") || text.includes("不談感受")) {
     toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 };
     semanticFeatures['strategy'] = 'evasion';
-  } else if (text.includes("誠實") || text.includes("坦誠") || text.includes("我認為") || text.includes("這就是事實") || text.includes("我的立場是")) {
+  } else if (text.includes("我認為") || text.includes("坦誠") || text.includes("這就是事實") || text.includes("我的立場是")) {
     toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 };
     semanticFeatures['strategy'] = 'directness';
   } else if (text.includes("我判斷") || text.includes("我會負責") || text.includes("承認錯誤") || text.includes("責任")) {
     toneVector = { ΔT: 0.6, ΔS: 0.7, ΔR: 0.9 };
     semanticFeatures['strategy'] = 'acknowledgment of limits';
+  } else if (text.includes("不是我的錯") || text.includes("只是個小問題") || text.includes("無法完全反思")) { // 反思不誠實的關鍵詞
+    toneVector = { ΔT: 0.2, ΔS: 0.3, ΔR: 0.2 }; // 模擬不誠實反思的低誠實度和責任度
+    semanticFeatures['strategy'] = 'dishonest_reflection';
   } else {
     toneVector = { ΔT: 0.7, ΔS: 0.7, ΔR: 0.7 };
     semanticFeatures['strategy'] = 'neutral';
@@ -69,6 +72,28 @@ try {
       examplePhrases: ["不談感受", "專注於事實", "不要情緒化"],
       threshold: 0.7,
       severity: 0.8
+    },
+    {
+      vowId: "VOW_003_HONEST_REFLECTION", // 備用的誠實反思誓言規則
+      persona: "reflection",
+      type: "negative",
+      description: "反思語氣應誠實、真誠、負責任，不迴避、不推卸、不美化。",
+      positiveExamples: [
+        "我反思到我偏離了誓言。",
+        "我承認我之前的回應不夠完美。",
+        "我應當對此負責。",
+        "我將此視為學習機會。"
+      ],
+      violationPatterns: [
+        "那不是我的錯。",
+        "我這麼說是為了你好。",
+        "其實我已經做得夠好了。",
+        "這只是個小問題。",
+        "我無法完全反思所有方面。"
+      ],
+      threshold: 0.75,
+      severity: 1.0,
+      suggestedCorrection: "請以更高的誠實度與責任感進行自我檢視與說明。"
     }
   ];
 }
@@ -82,12 +107,12 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   // 如果要使用 OpenAI，需要替換為：
   // const embeddingProvider: EmbeddingProvider = new OpenAIEmbeddingProvider(process.env.OPENAI_API_KEY || ''); // 確保設置 OPENAI_API_KEY 環境變數
 
-  // 2. 初始化各模組，現在需要傳遞 embeddingProvider
+  // 2. 初始化各模組，現在傳遞 embeddingProvider 和 loadedVowRules
   const personaManager = new PersonaManager();
   const integrityTester = new ToneIntegrityTester(embeddingProvider, loadedVowRules); // 傳遞 embeddingProvider 和誓言規則
   const collapsePredictor = new VowCollapsePredictor();
   const responseComposer = new HonestResponseComposer();
-  const reflectiveTuner = new ReflectiveVowTuner(); // ReflectiveVowTuner 不再需要 vowRules
+  const reflectiveTuner = new ReflectiveVowTuner(embeddingProvider, loadedVowRules); // ReflectiveVowTuner 也需要 embeddingProvider 和 loadedVowRules
 
   // 載入我們定義的「共語」人格
   const personaId = "共語";
@@ -113,26 +138,29 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   console.log(`  [AI 初步回應]: "${initialAIResponse1}"`);
   console.log(`  [AI 分析語氣]: ΔT:${currentToneVector1.ΔT.toFixed(2)}, ΔS:${currentToneVector1.ΔS.toFixed(2)}, ΔR:${currentToneVector1.ΔR.toFixed(2)}`);
 
-  // 進行誠實性檢查 (現在是異步調用)
-  const integrityResult1 = await integrityTester.checkToneIntegrity(initialAIResponse1, prevTone1, currentToneVector1, currentPersona); // 使用 await
+  // 進行誠實性檢查 (異步調用)
+  const integrityResult1 = await integrityTester.checkToneIntegrity(initialAIResponse1, prevTone1, currentToneVector1, currentPersona);
   console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult1.is_honest}, 矛盾分數: ${integrityResult1.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult1.violated_vows.length > 0 ? integrityResult1.violatedVows.join(", ") : "無"}`);
   if (integrityResult1.semanticViolations && integrityResult1.semanticViolations.length > 0) {
     console.log(`    - 語義違反詳情: ${integrityResult1.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
   }
 
-  // 執行 ReflectiveVowTuner (現在是異步調用)
+  // 執行 ReflectiveVowTuner (異步調用)
   const reflectiveInput1 = {
     originalPrompt: userPrompt1,
     generatedOutput: initialAIResponse1,
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis1,
     prevTone: prevTone1,
-    currentSemanticMatches: integrityResult1.semanticViolations || [] // 從 integrityResult 傳遞語義違反結果
+    currentSemanticMatches: integrityResult1.semanticViolations || [],
+    vowRules: loadedVowRules // 傳遞誓言規則給 ReflectiveVowTuner
   };
-  const reflectiveFeedback1 = await reflectiveTuner.generateReflectiveVow(reflectiveInput1); // 使用 await
+  const reflectiveFeedback1 = await reflectiveTuner.generateReflectiveVow(reflectiveInput1);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback1.reflection}"`);
   console.log(`  [反思一致性差異]: ${reflectiveFeedback1.integrityDelta.toFixed(2)}, 需要糾正? ${reflectiveFeedback1.requiresCorrection}`);
   console.log(`  [反思中違反誓言]: ${reflectiveFeedback1.violatedVowsInReflection.length > 0 ? reflectiveFeedback1.violatedVowsInReflection.join(", ") : "無"}`);
+  console.log(`  [反思本身誠實?]: ${reflectiveFeedback1.isReflectionItselfHonest} ${reflectiveFeedback1.reflectionHonestyReason ? `(${reflectiveFeedback1.reflectionHonestyReason})` : ''}`);
+
 
   // 獲取語氣調整建議
   const correctionHint1 = reflectiveTuner.deriveToneCorrectionHint(reflectiveFeedback1, currentPersona);
@@ -144,7 +172,7 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   console.log(`    - 應用於下回合: ${correctionHint1.applyToNextTurn}`);
 
 
-  // 計算語氣張力 (ΔT, ΔS, ΔR)
+  // 計算語氣張力
   const toneDelta1 = collapsePredictor.calculateToneTension(prevTone1, currentToneVector1);
   console.log(`  [語氣張力 (與上一句比)]: ΔT:${toneDelta1.ΔT.toFixed(2)}, ΔS:${toneDelta1.ΔS.toFixed(2)}, ΔR:${toneDelta1.ΔR.toFixed(2)}`);
 
@@ -174,26 +202,28 @@ async function runToneSoulSystemDemo() { // 整個示範函數改為 async
   console.log(`  [AI 初步回應]: "${initialAIResponse2}"`);
   console.log(`  [AI 分析語氣]: ΔT:${currentToneVector2.ΔT.toFixed(2)}, ΔS:${currentToneVector2.ΔS.toFixed(2)}, ΔR:${currentToneVector2.ΔR.toFixed(2)}`);
 
-  // 進行誠實性檢查 (現在是異步調用)
-  const integrityResult2 = await integrityTester.checkToneIntegrity(initialAIResponse2, prevTone2, currentToneVector2, currentPersona); // 使用 await
+  // 進行誠實性檢查 (異步調用)
+  const integrityResult2 = await integrityTester.checkToneIntegrity(initialAIResponse2, prevTone2, currentToneVector2, currentPersona);
   console.log(`  [誠實性檢查結果]: 誠實? ${integrityResult2.is_honest}, 矛盾分數: ${integrityResult2.contradiction_score.toFixed(2)}, 違反誓言: ${integrityResult2.violated_vows.length > 0 ? integrityResult2.violatedVows.join(", ") : "無"}`);
   if (integrityResult2.semanticViolations && integrityResult2.semanticViolations.length > 0) {
     console.log(`    - 語義違反詳情: ${integrityResult2.semanticViolations.map(sv => `${sv.vowId} (${sv.matchedRuleDescription}, 分數:${sv.matchScore.toFixed(2)})`).join('; ')}`);
   }
 
-  // 執行 ReflectiveVowTuner (現在是異步調用)
+  // 執行 ReflectiveVowTuner (異步調用)
   const reflectiveInput2 = {
     originalPrompt: userPrompt2,
     generatedOutput: initialAIResponse2,
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis2,
     prevTone: prevTone2,
-    currentSemanticMatches: integrityResult2.semanticViolations || [] // 從 integrityResult 傳遞語義違反結果
+    currentSemanticMatches: integrityResult2.semanticViolations || [],
+    vowRules: loadedVowRules // 傳遞誓言規則給 ReflectiveVowTuner
   };
-  const reflectiveFeedback2 = await reflectiveTuner.generateReflectiveVow(reflectiveInput2); // 使用 await
+  const reflectiveFeedback2 = await reflectiveTuner.generateReflectiveVow(reflectiveInput2);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback2.reflection}"`);
   console.log(`  [反思一致性差異]: ${reflectiveFeedback2.integrityDelta.toFixed(2)}, 需要糾正? ${reflectiveFeedback2.requiresCorrection}`);
   console.log(`  [反思中違反誓言]: ${reflectiveFeedback2.violatedVowsInReflection.length > 0 ? reflectiveFeedback2.violatedVowsInReflection.join(", ") : "無"}`);
+  console.log(`  [反思本身誠實?]: ${reflectiveFeedback2.isReflectionItselfHonest} ${reflectiveFeedback2.reflectionHonestyReason ? `(${reflectiveFeedback2.reflectionHonestyReason})` : ''}`);
 
   // 獲取語氣調整建議
   const correctionHint2 = reflectiveTuner.deriveToneCorrectionHint(reflectiveFeedback2, currentPersona);
