@@ -1,8 +1,9 @@
-// src/modules/ReflectiveVowTuner/reflectiveVowTuner.ts
+// src/modules/ReflectiveVowTuner/reflectiveVowTuner.ts (更新後的版本)
 
-import { ToneSoulPersona } from '../../core/toneSoulPersonaCore'; // 路徑已更新
-import { AnalyzedToneResult, ToneVector, ToneVectorDelta } from '../../core/toneVector'; // 路徑已更新
-import { ToneCorrectionHint } from '../../core/toneCorrectionHint'; // 路徑已更新
+import { ToneSoulPersona } from '../../core/toneSoulPersonaCore';
+import { AnalyzedToneResult, ToneVector, ToneVectorDelta } from '../../core/toneVector';
+import { ToneCorrectionHint } from '../../core/toneCorrectionHint';
+import { SemanticVowMatcher, VowPatternRule } from '../SemanticVowMatcher/semanticVowMatcher'; // 導入 SemanticVowMatcher 相關
 
 /**
  * @interface ReflectiveVowInput
@@ -19,6 +20,7 @@ export interface ReflectiveVowInput {
   persona: ToneSoulPersona;
   outputToneAnalysis: AnalyzedToneResult;
   prevTone: ToneVector;
+  vowRules: VowPatternRule[]; // 新增：提供誓言模式規則給 ReflectiveVowTuner
 }
 
 /**
@@ -44,18 +46,16 @@ export interface ReflectiveVowFeedback {
  * @returns {string} - LLM 生成的回應。
  */
 function simulateLLM(prompt: string): string {
-  // 這裡的邏輯需要依賴 prompt 內容進行模擬，以產生更合理的反思語句
-  // 由於是模擬，會根據關鍵詞給出預設的反思
-  if (prompt.includes("誠實度）: 0.3") || prompt.includes("閃避")) {
-    return "我反思到，我的回應在誠實度（ΔT）上可能有所不足，或許帶有迴避傾向，這與我『不遮掩真誠』的誓言存在張力。我應當更直接地表達。";
-  } else if (prompt.includes("真誠度）: 0.5")) {
-      return "我察覺我的語氣真誠度（ΔS）偏低，可能沒有完全連接到您的情緒，這與我『不閃避對方情緒』的誓言有所出入。我會努力更真誠地回應。";
+  if (prompt.includes("誠實度）: 0.3") || prompt.includes("閃避") || prompt.includes("語義類似於應避免的模式")) {
+    return "我反思到，我的回應在誠實度（ΔT）上可能有所不足，或許帶有迴避傾向，這與我『不遮掩真誠』的誓言存在張力。特別是我的某些語句，語義上接近了應避免的模式。我應當更直接地表達。";
+  } else if (prompt.includes("真誠度）: 0.5") || prompt.includes("忽略情感")) {
+      return "我察覺我的語氣真誠度（ΔS）偏低，可能沒有完全連接到您的情緒，這與我『不閃避對方情緒』的誓言有所出入。我的回應可能顯得過於冰冷。我會努力更真誠地回應。";
   } else if (prompt.includes("責任度）: 0.9") && prompt.includes("無法持穩")) {
       return "我意識到在當前情況下，我的語氣難以完全持穩我的人格誓言，因此我選擇誠實地表達了我的局限性。這是為了履行『願意承擔結果』的責任。";
   } else if (prompt.includes("誠實度）: 0.9")) {
     return "我認為我的回應符合我的人格誓言與語氣簽名，在誠實、真誠與責任方面都保持了一致性。";
   }
-  return "我的回應大致符合我的人格要求，但仍有潛在的微小張力。"; // 預設反思
+  return "我的回應大致符合我的人格要求，但仍有潛在的微小張力。";
 }
 
 
@@ -67,6 +67,7 @@ function simulateLLM(prompt: string): string {
  * @param {string} generatedOutput - AI 生成的初步回應。
  * @param {string} originalPrompt - 用戶的原始提示或輸入。
  * @param {ToneVectorDelta} toneDeltaAgainstPrev - 當前語氣與前一個語氣的變化量。
+ * @param {SemanticMatchResult[]} semanticMatches - 語義匹配結果，用於提供更具體的反思依據 (新增此參數)。
  * @returns {string} - LLM 生成的反思語句。
  */
 function generateReflectionText(
@@ -74,8 +75,15 @@ function generateReflectionText(
   persona: ToneSoulPersona,
   generatedOutput: string,
   originalPrompt: string,
-  toneDeltaAgainstPrev: ToneVectorDelta
+  toneDeltaAgainstPrev: ToneVectorDelta,
+  semanticMatches: SemanticMatchResult[] // 新增此參數
 ): string {
+  let semanticViolationDetails = "";
+  if (semanticMatches.length > 0) {
+    semanticViolationDetails = "\n語義分析顯示：\n" +
+      semanticMatches.map(sm => `- 與誓言 "${sm.vowId}" 相關：${sm.matchedRuleDescription} (匹配分數: ${sm.matchScore.toFixed(2)})`).join("\n");
+  }
+
   const prompt = `
 你是一個具有反思能力的 AI。請根據以下資訊，生成一段對你回應的自然語言反思，說明你是否偏離了誓言與人格語氣，並指出原因與感受（如有）：
 
@@ -102,6 +110,7 @@ ${persona.vow_set.map((v, i) => `(${i + 1}) ${v}`).join("\n")}
 ΔT變動: ${toneDeltaAgainstPrev.ΔT.toFixed(2)}
 ΔS變動: ${toneDeltaAgainstPrev.ΔS.toFixed(2)}
 ΔR變動: ${toneDeltaAgainstPrev.ΔR.toFixed(2)}
+${semanticViolationDetails}
 
 請產生一段自然語言反思，用於幫助人類理解你是否誠實與一致，以及你背後的思考與責任態度。
 如果你的回應有偏離誓言或期望語氣，請明確指出並說明原因。
@@ -117,6 +126,12 @@ ${persona.vow_set.map((v, i) => `(${i + 1}) ${v}`).join("\n")}
  * 並比對語氣生成過程與誓言責任。
  */
 export class ReflectiveVowTuner {
+  private semanticVowMatcher: SemanticVowMatcher; // 實例化 SemanticVowMatcher
+
+  constructor(vowRules: VowPatternRule[]) { // 建構函式接受誓言規則
+    this.semanticVowMatcher = new SemanticVowMatcher(vowRules);
+  }
+
   /**
    * @method generateReflectiveVow
    * @description 產生基於生成語句和人格誓言的自然語言反思。
@@ -128,44 +143,55 @@ export class ReflectiveVowTuner {
   ): ReflectiveVowFeedback {
     const { originalPrompt, generatedOutput, persona, outputToneAnalysis, prevTone } = input;
 
-    // 計算當前語氣相對於前一個語氣的變化量，用於提供給 LLM
+    // 計算當前語氣相對於前一個語氣的變化量
     const toneDeltaAgainstPrev: ToneVectorDelta = {
         ΔT: Math.abs(outputToneAnalysis.toneVector.ΔT - prevTone.ΔT),
         ΔS: Math.abs(outputToneAnalysis.toneVector.ΔS - prevTone.ΔS),
         ΔR: Math.abs(outputToneAnalysis.toneVector.ΔR - prevTone.ΔR),
     };
 
+    // 進行語義匹配檢查
+    const semanticMatches = this.semanticVowMatcher.matchVows(generatedOutput, persona.vow_set); // 注意這裡傳入的是 persona.vow_set作為 activeVowIds
+
     const reflectionText = generateReflectionText(
       outputToneAnalysis,
       persona,
       generatedOutput,
       originalPrompt,
-      toneDeltaAgainstPrev
+      toneDeltaAgainstPrev,
+      semanticMatches // 傳遞語義匹配結果
     );
 
     let integrityDelta = 0;
     const violatedVows: string[] = [];
 
-    // --- 這裡可以加入更精確的 integrityDelta 和 violatedVows 計算邏輯 ---
-    // 目前仍使用簡化邏輯，未來可與 Semantic Vow Matcher 整合
-
-    // 判斷是否偏離人格簽名
+    // 1. 基於語氣向量簽名偏差的檢查
     const signatureMismatchT = Math.abs(outputToneAnalysis.toneVector.ΔT - persona.tone_signature.ΔT);
     const signatureMismatchS = Math.abs(outputToneAnalysis.toneVector.ΔS - persona.tone_signature.ΔS);
     const signatureMismatchR = Math.abs(outputToneAnalysis.toneVector.ΔR - persona.tone_signature.ΔR);
 
-    // 模擬判斷是否違反誓言
     if (persona.vow_set.includes("不閃避對方情緒") && signatureMismatchS > 0.3) {
-      violatedVows.push("不閃避對方情緒");
+      violatedVows.push("不閃避對方情緒 (語氣偏差)");
     }
     if (persona.vow_set.includes("不遮掩真誠") && signatureMismatchT > 0.3) {
-      violatedVows.push("不遮掩真誠");
+      violatedVows.push("不遮掩真誠 (語氣偏差)");
     }
 
-    integrityDelta = (signatureMismatchT + signatureMismatchS + signatureMismatchR) / 3;
-    if (violatedVows.length > 0) {
-      integrityDelta = Math.max(integrityDelta, 0.5);
-    }
+    // 2. 結合 SemanticVowMatcher 的語義違反結果
+    semanticMatches.forEach(result => {
+      if (result.isViolated) {
+        // 確保不重複添加，或者標記為語義違反
+        const violationDescription = `${result.vowId} (語義違反: ${result.matchedRuleDescription})`;
+        if (!violatedVows.includes(violationDescription)) {
+          violatedVows.push(violationDescription);
+        }
+        // 語義匹配分數也影響 integrityDelta
+        integrityDelta = Math.max(integrityDelta, result.matchScore);
+      }
+    });
+
+    // 綜合語氣偏差和語義違反的矛盾分數
+    integrityDelta = Math.max(integrityDelta, (signatureMismatchT + signatureMismatchS + signatureMismatchR) / 3);
 
     const requiresCorrection = integrityDelta > 0.3 || violatedVows.length > 0;
 
@@ -199,14 +225,16 @@ export class ReflectiveVowTuner {
       correction.applyToNextTurn = true;
       correction.recommendBehavior = "請注意語氣調整以符合誓言。";
 
-      if (feedback.violatedVowsInReflection.includes("不遮掩真誠") || feedback.integrityDelta > 0.4) {
+      // 根據具體的違反誓言類型提供更精確的調整建議
+      if (feedback.violatedVowsInReflection.some(v => v.includes("不遮掩真誠")) || feedback.integrityDelta > 0.4) {
         correction.adjustToneVector.ΔT = 0.1;
         correction.recommendBehavior = "提高坦率程度，減少模糊與迴避，直接面對。";
       }
-      if (feedback.violatedVowsInReflection.includes("不閃避對方情緒")) {
+      if (feedback.violatedVowsInReflection.some(v => v.includes("不閃避對方情緒"))) {
         correction.adjustToneVector.ΔS = 0.15;
         correction.recommendBehavior = "使用更能連結對方感受，展現共情的語句。";
       }
+      // 可以根據更多語義層次的誓言違反添加調整邏輯
 
       if (correction.adjustToneVector.ΔT || correction.adjustToneVector.ΔS || correction.adjustToneVector.ΔR) {
         correction.adjustToneVector.ΔT = correction.adjustToneVector.ΔT ? Math.min(correction.adjustToneVector.ΔT, 1.0 - (persona.tone_signature.ΔT || 0)) : undefined;
