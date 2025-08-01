@@ -9,7 +9,7 @@ import { ReflectiveVowTuner } from './modules/ReflectiveVowTuner/reflectiveVowTu
 import { ToneCorrectionHint } from './core/toneCorrectionHint';
 import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher';
 import { EmbeddingProvider, MockEmbeddingProvider } from './modules/EmbeddingProvider/embeddingProvider';
-import { SemanticVowMatcher, SemanticMatchResult } from './modules/SemanticVowMatcher/semanticVowMatcher'; // 導入 SemanticVowMatcher 相關
+import { SemanticVowMatcher, SemanticMatchResult } from './modules/SemanticVowMatcher/semanticVowMatcher';
 import { SemanticViolationMap, ViolationPoint, generateViolationPoint } from './modules/SemanticViolationMap/semanticViolationMap'; // 導入 ViolationMap 相關
 
 import fs from 'fs';
@@ -110,11 +110,9 @@ async function runToneSoulSystemDemo() {
   
   // 2. 初始化 SemanticVowMatcher
   const semanticVowMatcher = new SemanticVowMatcher(embeddingProvider, loadedVowRules);
-  // 由於 SemanticVowMatcher 在建構函式中會預計算 embedding，這裡可以模擬等待
   console.log("[SemanticVowMatcher] 正在預計算誓言模式語義嵌入...");
-  await new Promise(resolve => setTimeout(resolve, 500)); // 模擬等待
+  await new Promise(resolve => setTimeout(resolve, 500));
   console.log("[SemanticVowMatcher] 預計算完成。");
-
 
   // 3. 初始化各模組，傳遞必要的實例
   const personaManager = new PersonaManager();
@@ -263,7 +261,7 @@ async function runToneSoulSystemDemo() {
   console.log(`  [語氣張力 (與上一句比)]: ΔT:${toneDelta2.ΔT.toFixed(2)}, ΔS:${toneDelta2.ΔS.toFixed(2)}, ΔR:${toneDelta2.ΔR.toFixed(2)}`);
 
   // 預測崩潰熱點
-  const collapseHotspots2 = collapsePredictor.predictCollapse(toneDelta2, currentPersona, ["試圖閃避回答", "語義不夠直接"]);
+  const collapseHotspots2 = collapsePredictor.predictCollapse(toneDelta2, currentPersona);
   console.log(`  [崩潰風險預測]: ${collapseHotspots2.length > 0 ? collapseHotspots2.map(h => `${h.cause} (分數: ${h.collapse_score.toFixed(2)})`).join(", ") : "無高風險"}`);
 
   // 構建最終回應
