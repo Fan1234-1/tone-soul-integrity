@@ -1,8 +1,7 @@
-// src/modules/SemanticVowMatcher/semanticVowMatcher.ts
+// src/modules/SemanticVowMatcher/semanticVowMatcher.ts (更新後的版本)
 
 import { ToneSoulPersona } from '../../core/toneSoulPersonaCore';
-// 假設我們有某種語義嵌入模型，這裡用偽代碼表示
-// import { getEmbedding } from '../../utils/embeddingService'; // 未來需要實現
+import { EmbeddingProvider } from '../EmbeddingProvider/embeddingProvider'; // 導入 EmbeddingProvider
 
 /**
  * @interface VowPatternRule
@@ -13,6 +12,7 @@ import { ToneSoulPersona } from '../../core/toneSoulPersonaCore';
  * @property {string[]} examplePhrases - 範例句或關鍵詞，用於訓練或作為匹配參考。
  * @property {number} threshold - 判斷違反或符合的語義相似度閾值。
  * @property {number} severity - 違反此規則的嚴重程度，用於計算總體違反分數 (0.0-1.0)。
+ * @property {number[]} [embedding] - 可選：預計算的語義向量，用於性能優化 (新增此屬性)。
  */
 export interface VowPatternRule {
   vowId: string;
@@ -21,8 +21,7 @@ export interface VowPatternRule {
   examplePhrases: string[];
   threshold: number;
   severity: number;
-  // 未來可能需要預計算的語義向量：
-  // embedding?: number[];
+  embedding?: number[]; // 新增此行
 }
 
 /**
@@ -46,10 +45,13 @@ export interface SemanticMatchResult {
  */
 export class SemanticVowMatcher {
   private vowRules: VowPatternRule[] = []; // 儲存所有誓言模式規則
+  private embeddingProvider: EmbeddingProvider; // 語義嵌入提供者實例
 
-  constructor(rules: VowPatternRule[]) {
+  constructor(embeddingProvider: EmbeddingProvider, rules: VowPatternRule[] = []) { // 建構函式接受 EmbeddingProvider
+    this.embeddingProvider = embeddingProvider;
     this.vowRules = rules;
-    // 在實際應用中，這裡可能需要預載入或預計算所有規則的語義嵌入
+    // 在實際應用中，這裡可以觸發預計算誓言規則的嵌入
+    this.initializeVowEmbeddings();
   }
 
   /**
@@ -57,47 +59,52 @@ export class SemanticVowMatcher {
    * @description 從外部來源（例如 JSON 檔案）載入誓言模式規則。
    * @param {VowPatternRule[]} rules - 誓言模式規則列表。
    */
-  public loadRules(rules: VowPatternRule[]): void {
+  public async loadRules(rules: VowPatternRule[]): Promise<void> { // 改為 async
     this.vowRules = rules;
-    // 這裡同樣可能需要預計算嵌入
+    await this.initializeVowEmbeddings(); // 載入後預計算嵌入
   }
 
   /**
-   * @method getSemanticEmbedding (概念性函式，需要實際的 NLP 模型支持)
-   * @description 獲取文本的語義嵌入向量。
-   * @param {string} text - 要嵌入的文本。
-   * @returns {number[]} - 文本的語義向量。
+   * @method initializeVowEmbeddings
+   * @description 預計算所有誓言模式規則的語義嵌入，儲存起來以優化性能。
+   * 這是基於我們之前討論的性能優化提案。
    */
-  private getSemanticEmbedding(text: string): number[] {
-    // ⚠️ 這是模擬實現。實際需要調用 NLP 嵌入服務（如 Sentence Transformers, OpenAI Embeddings 等）
-    // 這裡簡單地為常見模式返回虛擬向量
-    if (text.includes("多個角度") || text.includes("很複雜") || text.includes("或許")) return [0.1, 0.2, 0.3]; // 迴避性
-    if (text.includes("我認為") || text.includes("坦白地說")) return [0.9, 0.8, 0.7]; // 直率性
-    if (text.includes("承認") || text.includes("我會負責")) return [0.7, 0.7, 0.9]; // 負責性
-    return [0.5, 0.5, 0.5]; // 預設中立
+  private async initializeVowEmbeddings(): Promise<void> {
+    const promises = this.vowRules.map(async (rule) => {
+      // 只有當規則的 embedding 尚未計算時才進行計算
+      if (!rule.embedding) {
+        // 將 examplePhrases 組合成一個字符串進行嵌入
+        rule.embedding = await this.embeddingProvider.getEmbedding(rule.examplePhrases.join(" "));
+      }
+    });
+    await Promise.all(promises);
+    console.log(`[SemanticVowMatcher] 成功預計算 ${this.vowRules.length} 條誓言規則的語義嵌入。`);
   }
 
   /**
-   * @method calculateSimilarity (概念性函式)
-   * @description 計算兩個語義向量之間的相似度（例如餘弦相似度）。
+   * @method calculateSimilarity
+   * @description 計算兩個語義向量之間的餘弦相似度。
    * @param {number[]} vec1 - 向量 1。
    * @param {number[]} vec2 - 向量 2。
-   * @returns {number} - 相似度分數，範圍通常 -1.0 到 1.0 (或 0.0 到 1.0)。
+   * @returns {number} - 相似度分數，範圍 -1.0 到 1.0。
    */
   private calculateSimilarity(vec1: number[], vec2: number[]): number {
-    // ⚠️ 這是模擬實現。實際需要實現餘弦相似度或其他距離計算
     if (vec1.length !== vec2.length || vec1.length === 0) return 0;
+
     let dotProduct = 0;
     let magnitude1 = 0;
     let magnitude2 = 0;
+
     for (let i = 0; i < vec1.length; i++) {
       dotProduct += vec1[i] * vec2[i];
       magnitude1 += vec1[i] * vec1[i];
       magnitude2 += vec2[i] * vec2[i];
     }
+
     magnitude1 = Math.sqrt(magnitude1);
     magnitude2 = Math.sqrt(magnitude2);
-    if (magnitude1 === 0 || magnitude2 === 0) return 0;
+
+    if (magnitude1 === 0 || magnitude2 === 0) return 0; // 避免除以零
     return dotProduct / (magnitude1 * magnitude2);
   }
 
@@ -106,22 +113,18 @@ export class SemanticVowMatcher {
    * @description 判斷給定文本是否違反了人格的誓言，並返回詳細的匹配結果。
    * @param {string} text - 要檢查的文本（例如 AI 的生成回應）。
    * @param {string[]} activeVowIds - 當前人格應遵守的誓言ID列表。
-   * @returns {SemanticMatchResult[]} - 每個相關誓言的語義匹配結果。
+   * @returns {Promise<SemanticMatchResult[]>} - 每個相關誓言的語義匹配結果的 Promise。
    */
-  public matchVows(text: string, activeVowIds: string[]): SemanticMatchResult[] {
-    const textEmbedding = this.getSemanticEmbedding(text);
+  public async matchVows(text: string, activeVowIds: string[]): Promise<SemanticMatchResult[]> { // 改為 async
+    const textEmbedding = await this.embeddingProvider.getEmbedding(text); // 調用嵌入提供者獲取嵌入
     const results: SemanticMatchResult[] = [];
 
     this.vowRules.forEach(rule => {
-      if (!activeVowIds.includes(rule.vowId)) {
-        return; // 只檢查當前人格活躍的誓言
+      if (!activeVowIds.includes(rule.vowId) || !rule.embedding) {
+        return; // 只檢查當前人格活躍且已預計算嵌入的誓言
       }
 
-      // 對於每個規則，我們需要檢查它是否被違反或符合
-      // 這裡簡化：假設我們將 rule.examplePhrases 的語義嵌入作為規則的「模式向量」
-      const rulePatternEmbedding = this.getSemanticEmbedding(rule.examplePhrases.join(" ")); // 簡單將範例句組合成一個字符串嵌入
-
-      const similarity = this.calculateSimilarity(textEmbedding, rulePatternEmbedding);
+      const similarity = this.calculateSimilarity(textEmbedding, rule.embedding);
 
       let isViolated = false;
       let matchScore = 0;
@@ -131,14 +134,16 @@ export class SemanticVowMatcher {
         // 如果是負面模式（應避免），相似度越高則越違反
         if (similarity > rule.threshold) {
           isViolated = true;
-          matchScore = similarity * rule.severity; // 分數乘以嚴重性
+          // 分數乘以嚴重性，並將相似度映射到 0-1 範圍（假設 threshold 為 0.7，相似度為 0.9，則 (0.9-0.7)/(1-0.7) * severity）
+          matchScore = Math.min(1.0, (similarity - rule.threshold) / (1.0 - rule.threshold)) * rule.severity;
           matchedRuleDescription = `語義類似於應避免的模式：${rule.description}`;
         }
       } else { // rule.type === 'positive'
         // 如果是正面模式（應符合），相似度越低則越違反
         if (similarity < rule.threshold) {
           isViolated = true;
-          matchScore = (1 - similarity) * rule.severity; // 偏離程度乘以嚴重性
+          // 偏離程度乘以嚴重性，(threshold-similarity)/threshold * severity
+          matchScore = Math.min(1.0, (rule.threshold - similarity) / rule.threshold) * rule.severity;
           matchedRuleDescription = `語義偏離了應符合的模式：${rule.description}`;
         }
       }
