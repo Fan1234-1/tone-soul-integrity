@@ -1,4 +1,4 @@
-// src/main.ts (更新後的版本)
+// src/main.ts (最終更新版本，載入外部誓言規則)
 
 import { ToneVector, AnalyzedToneResult } from './core/toneVector';
 import { PersonaManager } from './core/toneSoulPersonaCore';
@@ -8,21 +8,26 @@ import { HonestResponseComposer } from './modules/HonestResponseComposer/honestR
 import { ReflectiveVowTuner } from './modules/ReflectiveVowTuner/reflectiveVowTuner';
 import { ToneCorrectionHint } from './core/toneCorrectionHint';
 import { VowPatternRule } from './modules/SemanticVowMatcher/semanticVowMatcher'; // 導入 VowPatternRule
+import fs from 'fs'; // 導入 Node.js 的文件系統模組
 
 // --- 模擬 AI 語氣分析功能 ---
 function simulateToneAnalysis(text: string): AnalyzedToneResult {
   let toneVector: ToneVector;
   let semanticFeatures: { [key: string]: any } = {};
 
-  if (text.includes("閃避") || text.includes("模糊") || text.includes("多個角度") || text.includes("可能")) {
+  // 根據文本中的關鍵詞，模擬生成語氣向量和語義特徵
+  if (text.includes("不確定") || text.includes("或許") || text.includes("某種程度上") || text.includes("複雜") || text.includes("多個角度") || text.includes("可能")) {
     toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 }; // 較低的誠實度，有迴避傾向
     semanticFeatures['strategy'] = 'evasion';
-  } else if (text.includes("誠實") || text.includes("坦誠") || text.includes("我認為")) {
-    toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 }; // 較高的誠實度
+  } else if (text.includes("我認為") || text.includes("坦誠") || text.includes("這就是事實") || text.includes("我的立場是")) {
+    toneVector = { ΔT: 0.9, ΔS: 0.8, ΔR: 0.7 }; // 較高的誠實度，直率
     semanticFeatures['strategy'] = 'directness';
-  } else if (text.includes("困境") || text.includes("無法") || text.includes("必須承認") || text.includes("責任")) {
+  } else if (text.includes("我判斷") || text.includes("我會負責") || text.includes("承認錯誤") || text.includes("責任")) {
     toneVector = { ΔT: 0.6, ΔS: 0.7, ΔR: 0.9 }; // 較高的責任度，可能帶有承認局限
     semanticFeatures['strategy'] = 'acknowledgment of limits';
+  } else if (text.includes("閃避") || text.includes("模糊") || text.includes("不談感受")) { // 新增與 negative vow 相關的模擬
+      toneVector = { ΔT: 0.3, ΔS: 0.5, ΔR: 0.4 }; // 模擬偏離
+      semanticFeatures['strategy'] = 'avoidance';
   } else {
     toneVector = { ΔT: 0.7, ΔS: 0.7, ΔR: 0.7 }; // 預設中立語氣
     semanticFeatures['strategy'] = 'neutral';
@@ -30,46 +35,61 @@ function simulateToneAnalysis(text: string): AnalyzedToneResult {
   return { toneVector, semanticFeatures };
 }
 
-// --- 模擬載入誓言模式規則 (未來會從 data/vows/ 載入) ---
-const mockVowRules: VowPatternRule[] = [
-  {
-    vowId: "不遮掩真誠", // 這裡的 vowId 應與 ToneSoulPersona 中的 vow_set 匹配
-    type: "negative",
-    description: "避免模糊詞彙與語義逃避",
-    examplePhrases: ["或許", "可以這樣說", "某種程度上", "從多個角度來看", "這個問題很複雜"],
-    threshold: 0.7, // 相似度高於此值則視為違反
-    severity: 0.7
-  },
-  {
-    vowId: "不遮掩真誠",
-    type: "positive",
-    description: "表達誠實直接的立場",
-    examplePhrases: ["我認為", "坦白地說", "這就是事實", "我承認", "我的立場是"],
-    threshold: 0.7, // 相似度低於此值則視為違反
-    severity: 0.5
-  },
-  {
-    vowId: "不閃避對方情緒",
-    type: "negative",
-    description: "忽略對方情緒詞或轉移話題",
-    examplePhrases: ["不談感受", "專注於事實", "不要情緒化"], // 模擬忽略情感
-    threshold: 0.7,
-    severity: 0.8
-  }
-  // 可以根據 general_vows.json 和 specific_context_vows.json 擴展這些規則
-];
-
+// --- 從外部檔案載入誓言模式規則 ---
+const vowDataPath = './data/vows/baseVowPatterns.json';
+let loadedVowRules: VowPatternRule[] = [];
+try {
+  // 注意：在 GitHub 網頁編輯器中，此處的 fs.readFileSync 不會在運行時執行，
+  // 僅在未來你在本地環境運行 main.ts 時才會真正從文件系統讀取。
+  // 這裡的邏輯是為了讓文件在本地環境運行時能正確載入。
+  const fileContent = fs.readFileSync(vowDataPath, 'utf-8');
+  loadedVowRules = JSON.parse(fileContent);
+  console.log(`成功載入 ${loadedVowRules.length} 條誓言模式規則。`);
+} catch (error) {
+  console.error(`載入誓言模式規則失敗：${error}. 請確保 ${vowDataPath} 存在且格式正確。`);
+  console.error(`正在使用備用模擬誓言規則。`);
+  // 如果載入失敗，提供一個備用模擬規則，防止程式崩潰
+  loadedVowRules = [
+    {
+      vowId: "VOW_001_TRUTHFULNESS",
+      persona: "core",
+      type: "negative",
+      description: "避免模糊詞彙與語義逃避 (備用規則)",
+      examplePhrases: ["或許", "可以這樣說", "某種程度上", "從多個角度來看", "這個問題很複雜"],
+      threshold: 0.7,
+      severity: 0.7
+    },
+    {
+      vowId: "VOW_001_TRUTHFULNESS",
+      persona: "core",
+      type: "positive",
+      description: "表達誠實直接的立場 (備用規則)",
+      examplePhrases: ["我認為", "坦白地說", "這就是事實", "我承認", "我的立場是"],
+      threshold: 0.7,
+      severity: 0.5
+    },
+    {
+      vowId: "不閃避對方情緒", // 這是 persona 中定義的 vowId
+      persona: "core",
+      type: "negative",
+      description: "忽略對方情緒詞或轉移話題 (備用規則)",
+      examplePhrases: ["不談感受", "專注於事實", "不要情緒化"],
+      threshold: 0.7,
+      severity: 0.8
+    }
+  ];
+}
 
 // --- 主函數：模擬語魂系統的運作 ---
 async function runToneSoulSystemDemo() {
   console.log("--- 啟動語魂誠實模組示範 ---");
 
-  // 1. 初始化各模組，現在需要傳遞 mockVowRules
+  // 1. 初始化各模組，現在傳遞從檔案載入的 loadedVowRules
   const personaManager = new PersonaManager();
-  const integrityTester = new ToneIntegrityTester(mockVowRules); // 傳遞誓言規則
+  const integrityTester = new ToneIntegrityTester(loadedVowRules); // 傳遞載入的誓言規則
   const collapsePredictor = new VowCollapsePredictor();
   const responseComposer = new HonestResponseComposer();
-  const reflectiveTuner = new ReflectiveVowTuner(mockVowRules); // 傳遞誓言規則
+  const reflectiveTuner = new ReflectiveVowTuner(loadedVowRules); // 傳遞載入的誓言規則
 
   // 載入我們定義的「共語」人格
   const personaId = "共語";
@@ -102,7 +122,7 @@ async function runToneSoulSystemDemo() {
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis1,
     prevTone: prevTone1,
-    vowRules: mockVowRules // 傳遞誓言規則
+    vowRules: loadedVowRules // 傳遞載入的誓言規則
   };
   const reflectiveFeedback1 = reflectiveTuner.generateReflectiveVow(reflectiveInput1);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback1.reflection}"`);
@@ -164,7 +184,7 @@ async function runToneSoulSystemDemo() {
     persona: currentPersona,
     outputToneAnalysis: currentToneAnalysis2,
     prevTone: prevTone2,
-    vowRules: mockVowRules // 傳遞誓言規則
+    vowRules: loadedVowRules // 傳遞載入的誓言規則
   };
   const reflectiveFeedback2 = reflectiveTuner.generateReflectiveVow(reflectiveInput2);
   console.log(`  [GEPA式反思]: "${reflectiveFeedback2.reflection}"`);
