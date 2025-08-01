@@ -36,7 +36,8 @@ graph TD
 
 此圖闡釋了 `ReflectiveVowTuner` 模組如何作為「反思回饋鍊」的核心，將反思結果回饋到語氣生成中，實現系統的自我校準能力。
 
-```mermaid
+```
+mermaid
 graph LR
  subgraph AI Response Generation & Analysis
  A[Initial Prompt / User Input] --> B(HonestResponseComposer - Initial Output)
